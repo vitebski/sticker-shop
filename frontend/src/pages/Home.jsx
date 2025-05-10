@@ -125,26 +125,18 @@ const Home = () => {
       <section className="features-section">
         <div className="container">
           <div className="features-grid">
-            <div className="feature">
-              <div className="feature-icon">🚚</div>
-              <h3>Free Shipping</h3>
-              <p>On orders over $50</p>
-            </div>
-            <div className="feature">
-              <div className="feature-icon">🔒</div>
-              <h3>Secure Payment</h3>
-              <p>Safe & secure checkout</p>
-            </div>
-            <div className="feature">
-              <div className="feature-icon">💯</div>
-              <h3>Quality Guarantee</h3>
-              <p>Durable, waterproof stickers</p>
-            </div>
-            <div className="feature">
-              <div className="feature-icon">🔄</div>
-              <h3>Easy Returns</h3>
-              <p>30-day return policy</p>
-            </div>
+            {[
+              { icon: '🚚', title: 'Free Shipping', text: 'On orders over $50' },
+              { icon: '🔒', title: 'Secure Payment', text: 'Safe & secure checkout' },
+              { icon: '💯', title: 'Quality Guarantee', text: 'Durable, waterproof stickers' },
+              { icon: '🔄', title: 'Easy Returns', text: '30-day return policy' }
+            ].map((feature, index) => (
+              <div className="feature" key={`feature-${index}`}>
+                <div className="feature-icon">{feature.icon}</div>
+                <h3>{feature.title}</h3>
+                <p>{feature.text}</p>
+              </div>
+            ))}
           </div>
         </div>
       </section>

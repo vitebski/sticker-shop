@@ -1,5 +1,5 @@
-import { useContext, useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useContext, useState, useEffect, useRef } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { FaShoppingCart, FaUser, FaBars, FaTimes } from 'react-icons/fa';
 import AuthContext from '../../context/AuthContext';
 import CartContext from '../../context/CartContext';
@@ -11,7 +11,9 @@ const Header = () => {
   const [categories, setCategories] = useState([]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const navigate = useNavigate();
-  
+  const location = useLocation();
+  const menuRef = useRef(null);
+
   const { itemCount } = getCartTotals();
 
   // Fetch categories
@@ -24,8 +26,29 @@ const Header = () => {
         console.error('Error fetching categories:', error);
       }
     };
-    
+
     fetchCategories();
+  }, []);
+
+  // Close mobile menu on route change
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
+
+  // Close mobile menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target) &&
+          !event.target.classList.contains('mobile-toggle') &&
+          !event.target.closest('.mobile-toggle')) {
+        setMobileMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
   }, []);
 
   const handleLogout = () => {
@@ -44,12 +67,24 @@ const Header = () => {
           <div className="logo">
             <Link to="/">Sticker Shop</Link>
           </div>
-          
-          <div className="mobile-toggle" onClick={toggleMobileMenu}>
+
+          <div className="mobile-toggle" onClick={toggleMobileMenu} aria-label="Toggle menu">
             {mobileMenuOpen ? <FaTimes /> : <FaBars />}
           </div>
-          
-          <nav className={`nav-menu ${mobileMenuOpen ? 'active' : ''}`}>
+
+          <nav className={`nav-menu ${mobileMenuOpen ? 'active' : ''}`} ref={menuRef}>
+            {/* Mobile menu close button */}
+            {mobileMenuOpen && (
+              <div className="mobile-close" onClick={() => setMobileMenuOpen(false)} style={{
+                textAlign: 'right',
+                marginBottom: '1rem',
+                display: 'block',
+                fontSize: '1.5rem',
+                cursor: 'pointer'
+              }}>
+                <FaTimes />
+              </div>
+            )}
             <ul>
               <li>
                 <Link to="/" onClick={() => setMobileMenuOpen(false)}>Home</Link>
@@ -63,7 +98,7 @@ const Header = () => {
                   <ul className="dropdown-menu">
                     {categories.map((category) => (
                       <li key={category._id}>
-                        <Link 
+                        <Link
                           to={`/products/category/${category._id}`}
                           onClick={() => setMobileMenuOpen(false)}
                         >
@@ -95,13 +130,13 @@ const Header = () => {
               )}
             </ul>
           </nav>
-          
+
           <div className="header-actions">
             <Link to="/cart" className="cart-icon">
               <FaShoppingCart />
               {itemCount > 0 && <span className="cart-count">{itemCount}</span>}
             </Link>
-            
+
             {isAuthenticated ? (
               <div className="user-menu dropdown">
                 <span className="user-icon">

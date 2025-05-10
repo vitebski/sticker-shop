@@ -19,6 +19,7 @@
 html {
   line-height: 1.15;
   -webkit-text-size-adjust: 100%;
+  height: 100%;
 }
 
 body {
@@ -27,7 +28,14 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  display: block; /* Override the flex display that might be causing layout issues */
+  height: 100%;
+  overflow-x: hidden; /* Prevent horizontal scrolling */
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
 }
 
 img, picture, video, canvas, svg {
