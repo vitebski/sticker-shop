@@ -149,212 +149,15 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// MongoDB connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/sticker-shop';
+// Import the centralized MongoDB connection utility
+const mongoConnect = require('../utils/mongoConnect');
 
 // Log MongoDB URI (without password) for debugging
-console.log('MongoDB URI:', MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@'));
+console.log('MongoDB URI:', mongoConnect.MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@'));
 console.log('Environment:', process.env.NODE_ENV || 'development');
 
-// Check if we're running in Vercel
-const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
-console.log('Running in Vercel environment:', isVercel ? 'Yes' : 'No');
-
-// Cached connection for serverless environment
-let cachedDb = null;
-let connectionPromise = null;
-
-// Try to load the Vercel-specific connection utility if we're in Vercel
-let vercelMongoConnect;
-try {
-  if (isVercel) {
-    console.log('Attempting to load Vercel-specific MongoDB connection utility');
-    // Use a relative path that works in both local and Vercel environments
-    vercelMongoConnect = require('../utils/vercelMongoConnect');
-    console.log('Vercel-specific MongoDB connection utility loaded successfully');
-  }
-} catch (error) {
-  console.error('Failed to load Vercel-specific MongoDB connection utility:', error.message);
-  // Continue with the default connection method
-}
-
-const connectToDatabase = async () => {
-  // If we're in Vercel and have the Vercel-specific connection utility, use it
-  if (isVercel && vercelMongoConnect) {
-    try {
-      console.log('Using Vercel-specific MongoDB connection utility');
-      return await vercelMongoConnect.connectToMongoDB(MONGODB_URI);
-    } catch (error) {
-      console.error('Vercel-specific MongoDB connection failed:', error.message);
-      console.log('Falling back to standard connection method');
-      // Fall back to the standard connection method
-    }
-  }
-
-  // Standard connection method (used for local development or as fallback)
-  // If we already have a connection promise in progress, return it
-  if (connectionPromise) {
-    return connectionPromise;
-  }
-
-  // If we have a cached connection and it's connected, use it
-  if (cachedDb && mongoose.connection.readyState === 1) {
-    console.log('Using cached database connection');
-    return cachedDb;
-  }
-
-  // Reset any existing connections if they're in a bad state
-  if (mongoose.connection.readyState !== 0) {
-    console.log('Resetting existing MongoDB connection...');
-    try {
-      await mongoose.connection.close();
-    } catch (err) {
-      console.log('Error closing existing connection:', err.message);
-      // Continue anyway
-    }
-  }
-
-  try {
-    console.log('Connecting to MongoDB using standard method...');
-
-    // Create a new connection promise with retry logic
-    connectionPromise = (async () => {
-      // Enhanced retry logic with more attempts and better backoff
-      let retries = 5; // Increased from 3 to 5 attempts
-      let lastError = null;
-      let attemptCount = 0;
-
-      // Add jitter to retry timing to prevent thundering herd problem
-      const getJitter = () => Math.random() * 100;
-
-      while (retries > 0) {
-        attemptCount++;
-        try {
-          // Optimized options for serverless environments with ECONNRESET protection
-          const options = {
-            // These options are deprecated in newer MongoDB driver versions
-            // but keeping them for backward compatibility
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-
-            // Critical timeouts for serverless - even shorter timeouts to fail fast
-            serverSelectionTimeoutMS: 2000, // Faster timeout for serverless
-            connectTimeoutMS: 2000, // Faster connection timeout
-            socketTimeoutMS: 10000, // Reduced from 20s to 10s for faster failure
-
-            // Network and pooling optimizations for free MongoDB Atlas tier
-            family: 4, // Use IPv4, skip trying IPv6
-            maxPoolSize: 1, // Strict limit of 1 for free MongoDB Atlas tier
-            minPoolSize: 0, // Don't maintain connections when not in use
-            maxIdleTimeMS: 3000, // Close idle connections after 3 seconds
-            waitQueueTimeoutMS: 1000, // Timeout for waiting for a connection from the pool
-
-            // Auto-reconnect settings - critical for ECONNRESET
-            heartbeatFrequencyMS: 3000, // Even more frequent heartbeats (was 5000)
-            retryWrites: true,
-            retryReads: true, // Add retry for reads
-            w: 'majority', // Write concern for data durability
-            wtimeoutMS: 2500, // Timeout for write operations
-
-            // For Atlas specifically
-            compressors: 'zlib', // Enable compression
-            zlibCompressionLevel: 6, // Medium compression level (0-9)
-
-            // Auto reconnect settings - critical for ECONNRESET
-            autoReconnect: true,
-            reconnectTries: 5, // Increased from 3 to 5
-            reconnectInterval: 250, // Reduced from 500ms to 250ms for faster reconnection
-
-            // Keep alive settings to prevent ECONNRESET
-            keepAlive: true,
-            keepAliveInitialDelay: 3000, // Reduced from 5000ms to 3000ms
-
-            // Additional options to help with ECONNRESET
-            bufferMaxEntries: 0, // Disable buffering for faster failure
-            autoIndex: false, // Disable auto-indexing for faster startup
-            directConnection: true, // Use direct connection to avoid proxy issues
-          };
-
-          // Connect to the database
-          const client = await mongoose.connect(MONGODB_URI, options);
-
-          // Log connection pool information
-          const db = mongoose.connection.db;
-          if (db && db.serverConfig && db.serverConfig.s && db.serverConfig.s.pool) {
-            const pool = db.serverConfig.s.pool;
-            console.log('MongoDB connection pool stats:', {
-              totalConnections: pool.totalConnectionCount,
-              availableConnections: pool.availableConnectionCount,
-              maxPoolSize: options.maxPoolSize,
-              minPoolSize: options.minPoolSize
-            });
-          } else {
-            console.log('MongoDB connected but pool information not available');
-          }
-
-          // Cache the database connection
-          cachedDb = client;
-          console.log('MongoDB connected successfully');
-          return cachedDb;
-        } catch (error) {
-          lastError = error;
-          retries--;
-
-          // Log the specific error for debugging
-          console.error(`MongoDB connection attempt failed (${3 - retries}/3):`, error.message);
-
-          // Enhanced special handling for ECONNRESET and other common MongoDB errors
-          if (error.code === 'ECONNRESET') {
-            console.log('Connection reset by MongoDB server. This may be due to network issues or IP restrictions.');
-
-            // Force a small delay before retry for ECONNRESET specifically
-            await new Promise(resolve => setTimeout(resolve, 100));
-
-            // Log more detailed information for debugging
-            console.log('Connection details:', {
-              uri: MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@'),
-              environment: process.env.NODE_ENV || 'development',
-              vercel: isVercel ? 'Yes' : 'No',
-              attempt: attemptCount,
-              remainingRetries: retries
-            });
-          } else if (error.name === 'MongooseServerSelectionError') {
-            console.log('Server selection error. MongoDB server may be down or unreachable.');
-          } else if (error.name === 'MongooseTimeoutError') {
-            console.log('MongoDB operation timed out. The server may be under heavy load.');
-          }
-
-          if (retries > 0) {
-            // Wait before retrying (exponential backoff with jitter)
-            const baseDelay = 250 * Math.pow(2, attemptCount);
-            const jitter = getJitter();
-            const delay = baseDelay + jitter;
-
-            console.log(`Retrying in ${Math.round(delay)}ms... (attempt ${attemptCount + 1}/6)`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-          }
-        }
-      }
-
-      // If we get here, all retries failed
-      console.error('All MongoDB connection attempts failed');
-      throw lastError;
-    })();
-
-    return connectionPromise;
-  } catch (error) {
-    console.error('MongoDB connection error:', error);
-    connectionPromise = null;
-    throw error;
-  } finally {
-    // Ensure the promise is cleared after completion or failure
-    setTimeout(() => {
-      if (connectionPromise) {
-        connectionPromise = null;
-      }
-    }, 5000);
-  }
-};
+// Use the centralized connectToDatabase function
+const connectToDatabase = mongoConnect.connectToDatabase;
 
 // Connect to MongoDB before handling requests
 app.use(async (req, res, next) => {
@@ -411,6 +214,30 @@ app.use(async (req, res, next) => {
           error: 'ECONNRESET',
           status: 'service_unavailable',
           retryAfter: 2 // Suggest retry after 2 seconds
+        });
+      }
+
+      // For EPIPE errors, provide a specific message
+      if (error.code === 'EPIPE') {
+        console.error('EPIPE in middleware:', error.message);
+
+        // Force mongoose connection state to disconnected to trigger a fresh connection on next request
+        if (mongoose.connection) {
+          mongoose.connection.readyState = 0;
+
+          // Try to close the connection explicitly
+          try {
+            mongoose.connection.close();
+          } catch (closeError) {
+            console.error('Error closing connection after EPIPE:', closeError.message);
+          }
+        }
+
+        return res.status(503).json({
+          message: 'Connection to database was broken. The server will attempt to reconnect on your next request.',
+          error: 'EPIPE',
+          status: 'service_unavailable',
+          retryAfter: 3 // Suggest retry after 3 seconds
         });
       }
 

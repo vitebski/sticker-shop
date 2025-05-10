@@ -3,8 +3,8 @@
 
 // Import dependencies
 const express = require('express');
-const { connectToMongoDB } = require('../backend/utils/vercelMongoConnect');
-const vercelMongoMiddleware = require('./vercelMongoMiddleware');
+const mongoose = require('mongoose');
+const mongoConnect = require('../backend/utils/mongoConnect');
 const dotenv = require('dotenv');
 
 // Load environment variables
@@ -12,10 +12,6 @@ dotenv.config();
 
 // Import the backend API
 const app = require('../backend/api/index.js');
-
-// Apply Vercel-specific MongoDB middleware
-// This will handle MongoDB connections for all routes
-app.use(vercelMongoMiddleware);
 
 // Add Vercel-specific headers for better performance
 app.use((req, res, next) => {
@@ -38,28 +34,35 @@ app.use((req, res, next) => {
 // Create a special health check route for Vercel
 app.get('/api/vercel-health', async (req, res) => {
   try {
-    // Get MongoDB URI from environment
-    const MONGODB_URI = process.env.MONGODB_URI;
-
-    if (!MONGODB_URI) {
-      return res.status(500).json({
-        status: 'error',
-        message: 'MongoDB URI not found in environment variables'
-      });
-    }
-
     // Log MongoDB URI (without password) for debugging
-    console.log('Vercel MongoDB URI:', MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@'));
+    console.log('Vercel MongoDB URI:', mongoConnect.MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@'));
 
-    // Try to connect to MongoDB using the specialized connection function
-    await connectToMongoDB(MONGODB_URI);
+    // Try to connect to MongoDB using the centralized connection function
+    await mongoConnect.connectToDatabase();
+
+    // Get connection pool information if available
+    let poolInfo = null;
+    if (mongoose.connection && mongoose.connection.db &&
+        mongoose.connection.db.serverConfig &&
+        mongoose.connection.db.serverConfig.s &&
+        mongoose.connection.db.serverConfig.s.pool) {
+
+      const pool = mongoose.connection.db.serverConfig.s.pool;
+      poolInfo = {
+        totalConnections: pool.totalConnectionCount,
+        availableConnections: pool.availableConnectionCount,
+        maxSize: pool.options.maxPoolSize || 'unknown',
+        minSize: pool.options.minPoolSize || 'unknown'
+      };
+    }
 
     // Return success response
     return res.status(200).json({
       status: 'success',
       message: 'Connected to MongoDB successfully',
       timestamp: new Date().toISOString(),
-      environment: process.env.NODE_ENV || 'production'
+      environment: process.env.NODE_ENV || 'production',
+      connectionPool: poolInfo
     });
   } catch (error) {
     console.error('Vercel health check error:', error);
