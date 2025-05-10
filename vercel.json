@@ -7,19 +7,13 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/backend/api/index.js"
+      "destination": "/api"
     },
     {
       "source": "/uploads/(.*)",
-      "destination": "/backend/api/index.js"
+      "destination": "/api"
     }
   ],
-  "functions": {
-    "backend/api/index.js": {
-      "memory": 1024,
-      "maxDuration": 15
-    }
-  },
   "headers": [
     {
       "source": "/api/(.*)",
