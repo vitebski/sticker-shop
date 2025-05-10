@@ -8,7 +8,7 @@
     "server": "cd backend && npm run dev",
     "client": "cd frontend && npm run dev",
     "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install",
-    "build": "node build.js",
+    "build": "./build.sh",
     "vercel-build": "npm run install-all && npm run build"
   },
   "keywords": [
