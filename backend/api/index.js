@@ -50,12 +50,37 @@ app.get('/api', (req, res) => {
 });
 
 // Health check route
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/api/health', async (req, res) => {
+  try {
+    // Check MongoDB connection
+    const dbStatus = mongoose.connection.readyState;
+    const dbStatusText = ['disconnected', 'connected', 'connecting', 'disconnecting'][dbStatus] || 'unknown';
+
+    // Return health status
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      database: {
+        status: dbStatusText,
+        statusCode: dbStatus
+      },
+      environment: process.env.NODE_ENV || 'development'
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // MongoDB connection
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/sticker-shop';
+
+// Log MongoDB URI (without password) for debugging
+console.log('MongoDB URI:', MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@'));
+console.log('Environment:', process.env.NODE_ENV || 'development');
 
 // Connect to MongoDB only once
 let isConnected = false;
@@ -67,15 +92,17 @@ const connectToDatabase = async () => {
   }
 
   try {
+    console.log('Connecting to MongoDB...');
     await mongoose.connect(MONGODB_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
     });
     isConnected = true;
-    console.log('MongoDB connected');
+    console.log('MongoDB connected successfully');
   } catch (error) {
     console.error('MongoDB connection error:', error);
-    return error;
+    throw error; // Rethrow to be caught by the middleware
   }
 };
 
@@ -85,8 +112,12 @@ app.use(async (req, res, next) => {
     await connectToDatabase();
     next();
   } catch (error) {
-    console.error('Database connection error:', error);
-    res.status(500).json({ message: 'Database connection failed' });
+    console.error('Database connection failed:', error.message);
+    return res.status(500).json({
+      message: 'Database connection failed',
+      error: error.message,
+      uri: MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@') // Hide credentials
+    });
   }
 });
 
