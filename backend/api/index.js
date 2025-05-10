@@ -33,6 +33,26 @@ app.use((req, res, next) => {
   next();
 });
 
+// Add Vercel-specific headers for better performance in production
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    // Add cache control headers for static resources
+    if (req.path.startsWith('/uploads/') || req.path.includes('.')) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } else if (req.method === 'GET') {
+      // Add some caching for GET API requests (5 minutes)
+      res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=300');
+    }
+
+    // Add Vercel-specific security headers
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+
+    next();
+  });
+}
+
 // Serve uploaded files
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
@@ -45,12 +65,58 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/payment', paymentRoutes);
 
 // Root route
-app.get('/api', (req, res) => {
+app.get('/api', (_req, res) => {
   res.json({ message: 'Sticker Shop API is running' });
 });
 
+// Vercel-specific health check route
+app.get('/api/vercel-health', async (_req, res) => {
+  try {
+    // Log MongoDB URI (without password) for debugging
+    console.log('Vercel MongoDB URI:', mongoConnect.MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@'));
+
+    // Try to connect to MongoDB using the centralized connection function
+    await connectToDatabase();
+
+    // Get connection pool information if available
+    let poolInfo = null;
+    if (mongoose.connection && mongoose.connection.db &&
+        mongoose.connection.db.serverConfig &&
+        mongoose.connection.db.serverConfig.s &&
+        mongoose.connection.db.serverConfig.s.pool) {
+
+      const pool = mongoose.connection.db.serverConfig.s.pool;
+      poolInfo = {
+        totalConnections: pool.totalConnectionCount,
+        availableConnections: pool.availableConnectionCount,
+        maxSize: pool.options.maxPoolSize || 'unknown',
+        minSize: pool.options.minPoolSize || 'unknown'
+      };
+    }
+
+    // Return success response
+    return res.status(200).json({
+      status: 'success',
+      message: 'Connected to MongoDB successfully',
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'production',
+      connectionPool: poolInfo
+    });
+  } catch (error) {
+    console.error('Vercel health check error:', error);
+
+    // Return error response
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to connect to MongoDB',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Enhanced health check route with connection pool information
-app.get('/api/health', async (req, res) => {
+app.get('/api/health', async (_req, res) => {
   try {
     // Check MongoDB connection
     const dbStatus = mongoose.connection.readyState;
