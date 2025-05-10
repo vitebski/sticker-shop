@@ -2,30 +2,70 @@ const Product = require('../models/Product');
 
 // Get all products with pagination
 exports.getProducts = async (req, res) => {
+  // Set a timeout for the query
+  const queryTimeout = setTimeout(() => {
+    console.error('Product query timeout - taking too long');
+  }, 5000); // 5 second warning
+  
   try {
+    console.log('Processing product query:', req.query);
+    const startTime = Date.now();
+    
     const pageSize = Number(req.query.pageSize) || 10;
     const page = Number(req.query.page) || 1;
     const category = req.query.category;
     const search = req.query.search;
+    const sort = req.query.sort || '-createdAt';
+    const minPrice = Number(req.query.minPrice) || 0;
+    const maxPrice = Number(req.query.maxPrice) || Number.MAX_SAFE_INTEGER;
+    const featured = req.query.featured === 'true' ? true : undefined;
     
     // Build query
     const query = {};
     
+    // Add price range filter
+    query.price = { $gte: minPrice };
+    if (maxPrice < Number.MAX_SAFE_INTEGER) {
+      query.price.$lte = maxPrice;
+    }
+    
+    // Add category filter
     if (category) {
       query.category = category;
     }
     
+    // Add featured filter
+    if (featured !== undefined) {
+      query.featured = featured;
+    }
+    
+    // Add text search
     if (search) {
       query.$text = { $search: search };
     }
     
-    const count = await Product.countDocuments(query);
+    console.log('MongoDB query:', JSON.stringify(query));
     
-    const products = await Product.find(query)
-      .populate('category', 'name')
-      .sort({ createdAt: -1 })
-      .limit(pageSize)
-      .skip(pageSize * (page - 1));
+    // Use Promise.all to run count and find queries in parallel
+    const [count, products] = await Promise.all([
+      // Use estimatedDocumentCount for better performance when no filters
+      Object.keys(query).length === 0 
+        ? Product.estimatedDocumentCount() 
+        : Product.countDocuments(query),
+      
+      Product.find(query)
+        .select('name price image category stock featured dimensions tags createdAt updatedAt')
+        .populate('category', 'name')
+        .sort(sort)
+        .limit(pageSize)
+        .skip(pageSize * (page - 1))
+        .lean() // Use lean() for better performance
+    ]);
+    
+    const endTime = Date.now();
+    console.log(`Query completed in ${endTime - startTime}ms`);
+    
+    clearTimeout(queryTimeout);
     
     res.json({
       products,
@@ -34,15 +74,32 @@ exports.getProducts = async (req, res) => {
       total: count,
     });
   } catch (error) {
+    clearTimeout(queryTimeout);
     console.error('Get products error:', error);
-    res.status(500).json({ message: 'Server error' });
+    
+    // Handle connection errors
+    if (error.name === 'MongooseError' || error.name === 'MongoError' || error.code === 'ECONNRESET') {
+      return res.status(503).json({ 
+        message: 'Database connection error. Please try again later.',
+        retry: true
+      });
+    }
+    
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message
+    });
   }
 };
 
 // Get a single product by ID
 exports.getProductById = async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id).populate('category', 'name');
+    const productId = req.params.id;
+    
+    const product = await Product.findById(productId)
+      .populate('category', 'name')
+      .lean(); // Use lean() for better performance
     
     if (product) {
       res.json(product);
@@ -51,7 +108,24 @@ exports.getProductById = async (req, res) => {
     }
   } catch (error) {
     console.error('Get product error:', error);
-    res.status(500).json({ message: 'Server error' });
+    
+    // Try to handle common errors
+    if (error.name === 'CastError') {
+      return res.status(400).json({ message: 'Invalid product ID format' });
+    }
+    
+    // Handle connection errors
+    if (error.name === 'MongooseError' || error.name === 'MongoError' || error.code === 'ECONNRESET') {
+      console.log('Database connection error in getProductById');
+      
+      // Try to return a generic error that's more helpful
+      return res.status(503).json({ 
+        message: 'Database connection error. Please try again later.',
+        retry: true
+      });
+    }
+    
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
@@ -79,7 +153,7 @@ exports.createProduct = async (req, res) => {
     res.status(201).json(product);
   } catch (error) {
     console.error('Create product error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
@@ -122,7 +196,7 @@ exports.updateProduct = async (req, res) => {
     res.json(updatedProduct);
   } catch (error) {
     console.error('Update product error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
@@ -139,6 +213,6 @@ exports.deleteProduct = async (req, res) => {
     res.json({ message: 'Product removed' });
   } catch (error) {
     console.error('Delete product error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
