@@ -4,12 +4,58 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="Sticker Shop - Your one-stop shop for high-quality stickers" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <title>Sticker Shop</title>
+    <style>
+      /* Critical CSS to fix layout issues */
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        overflow-x: hidden;
+      }
+      #root {
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+        width: 100%;
+      }
+      .container {
+        width: 100%;
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 0 1rem;
+        box-sizing: border-box;
+      }
+      .products-grid, .categories-grid, .features-grid {
+        display: grid;
+        width: 100%;
+      }
+      @media (min-width: 769px) {
+        .products-grid, .categories-grid {
+          grid-template-columns: repeat(4, 1fr);
+          gap: 2rem;
+        }
+        .features-grid {
+          grid-template-columns: repeat(4, 1fr);
+        }
+      }
+      @media (max-width: 768px) {
+        .products-grid, .categories-grid, .features-grid {
+          grid-template-columns: repeat(2, 1fr);
+          gap: 1rem;
+        }
+      }
+      @media (max-width: 480px) {
+        .products-grid, .categories-grid, .features-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
