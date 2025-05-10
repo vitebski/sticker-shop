@@ -111,12 +111,18 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/sticke
 console.log('MongoDB URI:', MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@'));
 console.log('Environment:', process.env.NODE_ENV || 'development');
 
-// Cached connection
+// Cached connection for serverless environment
 let cachedDb = null;
+let connectionPromise = null;
 
 const connectToDatabase = async () => {
-  // If we have a cached connection, use it
-  if (cachedDb) {
+  // If we already have a connection promise in progress, return it
+  if (connectionPromise) {
+    return connectionPromise;
+  }
+
+  // If we have a cached connection and it's connected, use it
+  if (cachedDb && mongoose.connection.readyState === 1) {
     console.log('Using cached database connection');
     return cachedDb;
   }
@@ -124,26 +130,55 @@ const connectToDatabase = async () => {
   try {
     console.log('Connecting to MongoDB...');
 
-    // Important options for serverless environments
-    const options = {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 5000, // Timeout after 5s
-      socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-      family: 4, // Use IPv4, skip trying IPv6
-      maxPoolSize: 10, // Maintain up to 10 socket connections
-      minPoolSize: 5, // Maintain at least 5 socket connections
-    };
+    // Create a new connection promise
+    connectionPromise = (async () => {
+      try {
+        // Optimized options for serverless environments
+        const options = {
+          // These options are deprecated in newer MongoDB driver versions
+          // but keeping them for backward compatibility
+          useNewUrlParser: true,
+          useUnifiedTopology: true,
 
-    // Connect to the database
-    const client = await mongoose.connect(MONGODB_URI, options);
+          // Critical timeouts for serverless
+          serverSelectionTimeoutMS: 3000, // Faster timeout for serverless
+          connectTimeoutMS: 3000, // Faster connection timeout
+          socketTimeoutMS: 30000, // Close sockets after 30 seconds of inactivity
 
-    // Cache the database connection
-    cachedDb = client;
-    console.log('MongoDB connected successfully');
-    return cachedDb;
+          // Network and pooling optimizations
+          family: 4, // Use IPv4, skip trying IPv6
+          maxPoolSize: 1, // Smaller pool size for serverless functions
+          minPoolSize: 0, // Don't maintain connections when not in use
+
+          // Auto-reconnect settings
+          heartbeatFrequencyMS: 10000, // Check server status every 10 seconds
+          retryWrites: true,
+          w: 'majority', // Write concern for data durability
+
+          // For Atlas specifically
+          compressors: 'zlib', // Enable compression
+        };
+
+        // Connect to the database
+        const client = await mongoose.connect(MONGODB_URI, options);
+
+        // Cache the database connection
+        cachedDb = client;
+        console.log('MongoDB connected successfully');
+        return cachedDb;
+      } catch (error) {
+        console.error('MongoDB connection error:', error);
+        throw error;
+      } finally {
+        // Clear the promise so future calls can try again if this one fails
+        connectionPromise = null;
+      }
+    })();
+
+    return connectionPromise;
   } catch (error) {
     console.error('MongoDB connection error:', error);
+    connectionPromise = null;
     throw error;
   }
 };
@@ -151,19 +186,35 @@ const connectToDatabase = async () => {
 // Connect to MongoDB before handling requests
 app.use(async (req, res, next) => {
   try {
-    // Skip health check route from DB connection requirement
-    if (req.path === '/api/health') {
+    // Skip health check route and root route from DB connection requirement
+    if (req.path === '/api/health' || req.path === '/api') {
       return next();
     }
 
-    // Set a timeout for the database connection
+    // Set a shorter timeout for the database connection (3s instead of 10s)
+    // This gives more time for the actual route handler to execute within Vercel's 10s limit
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Database connection timeout')), 10000);
+      setTimeout(() => reject(new Error('Database connection timeout')), 3000);
     });
 
-    // Race the connection against the timeout
-    await Promise.race([connectToDatabase(), timeoutPromise]);
-    next();
+    try {
+      // Race the connection against the timeout
+      await Promise.race([connectToDatabase(), timeoutPromise]);
+      next();
+    } catch (error) {
+      // If the error is a timeout, try to return a helpful error message
+      if (error.message === 'Database connection timeout') {
+        console.error('Database connection timed out');
+        return res.status(503).json({
+          message: 'Database connection timed out. Please try again later.',
+          error: 'Connection timeout',
+          status: 'service_unavailable'
+        });
+      }
+
+      // For other errors, pass through to the general error handler
+      throw error;
+    }
   } catch (error) {
     console.error('Database connection failed:', error.message);
     return res.status(500).json({
@@ -175,7 +226,7 @@ app.use(async (req, res, next) => {
 });
 
 // Error handling middleware
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   console.error('Error:', err.stack);
   res.status(500).json({ message: 'Something went wrong!', error: err.message });
 });
