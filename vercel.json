@@ -16,7 +16,25 @@
   "functions": {
     "api/index.js": {
       "memory": 1024,
-      "maxDuration": 10
+      "maxDuration": 15
     }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Connection",
+          "value": "keep-alive"
+        },
+        {
+          "key": "Keep-Alive",
+          "value": "timeout=5, max=1000"
+        }
+      ]
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
   }
 }

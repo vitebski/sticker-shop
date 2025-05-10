@@ -127,52 +127,95 @@ const connectToDatabase = async () => {
     return cachedDb;
   }
 
+  // Reset any existing connections if they're in a bad state
+  if (mongoose.connection.readyState !== 0) {
+    console.log('Resetting existing MongoDB connection...');
+    try {
+      await mongoose.connection.close();
+    } catch (err) {
+      console.log('Error closing existing connection:', err.message);
+      // Continue anyway
+    }
+  }
+
   try {
     console.log('Connecting to MongoDB...');
 
-    // Create a new connection promise
+    // Create a new connection promise with retry logic
     connectionPromise = (async () => {
-      try {
-        // Optimized options for serverless environments
-        const options = {
-          // These options are deprecated in newer MongoDB driver versions
-          // but keeping them for backward compatibility
-          useNewUrlParser: true,
-          useUnifiedTopology: true,
+      // Implement retry logic
+      let retries = 3;
+      let lastError = null;
 
-          // Critical timeouts for serverless
-          serverSelectionTimeoutMS: 3000, // Faster timeout for serverless
-          connectTimeoutMS: 3000, // Faster connection timeout
-          socketTimeoutMS: 30000, // Close sockets after 30 seconds of inactivity
+      while (retries > 0) {
+        try {
+          // Optimized options for serverless environments with ECONNRESET protection
+          const options = {
+            // These options are deprecated in newer MongoDB driver versions
+            // but keeping them for backward compatibility
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
 
-          // Network and pooling optimizations
-          family: 4, // Use IPv4, skip trying IPv6
-          maxPoolSize: 1, // Smaller pool size for serverless functions
-          minPoolSize: 0, // Don't maintain connections when not in use
+            // Critical timeouts for serverless
+            serverSelectionTimeoutMS: 2500, // Faster timeout for serverless
+            connectTimeoutMS: 2500, // Faster connection timeout
+            socketTimeoutMS: 20000, // Reduced from 30s to 20s
 
-          // Auto-reconnect settings
-          heartbeatFrequencyMS: 10000, // Check server status every 10 seconds
-          retryWrites: true,
-          w: 'majority', // Write concern for data durability
+            // Network and pooling optimizations
+            family: 4, // Use IPv4, skip trying IPv6
+            maxPoolSize: 1, // Smaller pool size for serverless functions
+            minPoolSize: 0, // Don't maintain connections when not in use
 
-          // For Atlas specifically
-          compressors: 'zlib', // Enable compression
-        };
+            // Auto-reconnect settings - critical for ECONNRESET
+            heartbeatFrequencyMS: 5000, // More frequent heartbeats (was 10000)
+            retryWrites: true,
+            retryReads: true, // Add retry for reads
+            w: 'majority', // Write concern for data durability
 
-        // Connect to the database
-        const client = await mongoose.connect(MONGODB_URI, options);
+            // For Atlas specifically
+            compressors: 'zlib', // Enable compression
 
-        // Cache the database connection
-        cachedDb = client;
-        console.log('MongoDB connected successfully');
-        return cachedDb;
-      } catch (error) {
-        console.error('MongoDB connection error:', error);
-        throw error;
-      } finally {
-        // Clear the promise so future calls can try again if this one fails
-        connectionPromise = null;
+            // Auto reconnect settings - critical for ECONNRESET
+            autoReconnect: true,
+            reconnectTries: 3,
+            reconnectInterval: 500,
+
+            // Keep alive settings to prevent ECONNRESET
+            keepAlive: true,
+            keepAliveInitialDelay: 5000,
+          };
+
+          // Connect to the database
+          const client = await mongoose.connect(MONGODB_URI, options);
+
+          // Cache the database connection
+          cachedDb = client;
+          console.log('MongoDB connected successfully');
+          return cachedDb;
+        } catch (error) {
+          lastError = error;
+          retries--;
+
+          // Log the specific error for debugging
+          console.error(`MongoDB connection attempt failed (${3 - retries}/3):`, error.message);
+
+          // Special handling for ECONNRESET
+          if (error.code === 'ECONNRESET') {
+            console.log('Connection reset by MongoDB server. This may be due to network issues or IP restrictions.');
+          }
+
+          if (retries > 0) {
+            // Wait before retrying (exponential backoff)
+            const delay = 500 * Math.pow(2, 3 - retries);
+            console.log(`Retrying in ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+        }
       }
+
+      // If we get here, all retries failed
+      console.error('All MongoDB connection attempts failed');
+      throw lastError;
     })();
 
     return connectionPromise;
@@ -180,6 +223,13 @@ const connectToDatabase = async () => {
     console.error('MongoDB connection error:', error);
     connectionPromise = null;
     throw error;
+  } finally {
+    // Ensure the promise is cleared after completion or failure
+    setTimeout(() => {
+      if (connectionPromise) {
+        connectionPromise = null;
+      }
+    }, 5000);
   }
 };
 
@@ -226,7 +276,7 @@ app.use(async (req, res, next) => {
 });
 
 // Error handling middleware
-app.use((err, req, res, _next) => {
+app.use((err, _req, res, _next) => {
   console.error('Error:', err.stack);
   res.status(500).json({ message: 'Something went wrong!', error: err.message });
 });

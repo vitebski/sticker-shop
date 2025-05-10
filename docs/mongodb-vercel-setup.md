@@ -70,6 +70,25 @@ If you're still experiencing connection issues:
 5. **Connection Pooling**: Ensure your code is optimized for serverless environments (connection pooling)
 6. **Timeouts**: Adjust connection timeouts to be shorter than Vercel's function timeout (10 seconds)
 
+### Fixing ECONNRESET Errors
+
+If you're seeing `ECONNRESET` errors in your Vercel logs, this indicates that the connection was reset by the MongoDB server. This is often caused by:
+
+1. **IP Access Restrictions**: MongoDB Atlas is actively rejecting connections from Vercel's IP addresses
+   - Solution: Follow the "Allow Access from Anywhere" or "Allow Access from Vercel IP Ranges" instructions above
+
+2. **Network Firewall Issues**: There might be firewall rules blocking the connection
+   - Solution: Contact MongoDB Atlas support to check for any network restrictions
+
+3. **Connection Pool Issues**: Too many connections being opened and closed rapidly
+   - Solution: Optimize your connection code to reuse connections and implement proper connection pooling
+
+4. **MongoDB Atlas Cluster Tier**: Free or shared clusters have more limitations
+   - Solution: Consider upgrading to a dedicated cluster for production use
+
+5. **MongoDB Atlas Maintenance**: The cluster might be undergoing maintenance
+   - Solution: Check the MongoDB Atlas status page and your email for maintenance notifications
+
 ## Additional Resources
 
 - [MongoDB Atlas Documentation](https://docs.atlas.mongodb.com/)
