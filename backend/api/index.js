@@ -49,12 +49,29 @@ app.get('/api', (req, res) => {
   res.json({ message: 'Sticker Shop API is running' });
 });
 
-// Health check route
+// Enhanced health check route with connection pool information
 app.get('/api/health', async (req, res) => {
   try {
     // Check MongoDB connection
     const dbStatus = mongoose.connection.readyState;
     const dbStatusText = ['disconnected', 'connected', 'connecting', 'disconnecting'][dbStatus] || 'unknown';
+
+    // Get connection pool information if available
+    let poolInfo = null;
+    if (dbStatus === 1 && mongoose.connection.db &&
+        mongoose.connection.db.serverConfig &&
+        mongoose.connection.db.serverConfig.s &&
+        mongoose.connection.db.serverConfig.s.pool) {
+
+      const pool = mongoose.connection.db.serverConfig.s.pool;
+      poolInfo = {
+        totalConnections: pool.totalConnectionCount,
+        availableConnections: pool.availableConnectionCount,
+        maxSize: pool.options.maxPoolSize || 'unknown',
+        minSize: pool.options.minPoolSize || 'unknown',
+        waitQueueSize: pool.waitQueueSize || 0
+      };
+    }
 
     // Try to connect to MongoDB if not connected
     let dbTestResult = 'not_tested';
@@ -68,6 +85,8 @@ app.get('/api/health', async (req, res) => {
           useUnifiedTopology: true,
           serverSelectionTimeoutMS: 2000, // Short timeout for health check
           connectTimeoutMS: 2000,
+          maxPoolSize: 1, // Strict limit for free MongoDB Atlas tier
+          minPoolSize: 0
         };
 
         await mongoose.connect(MONGODB_URI, options);
@@ -80,7 +99,29 @@ app.get('/api/health', async (req, res) => {
       dbTestResult = 'already_connected';
     }
 
-    // Return health status
+    // Get MongoDB server information if available
+    let serverInfo = null;
+    try {
+      if (dbStatus === 1 && mongoose.connection.db) {
+        const admin = mongoose.connection.db.admin();
+        const serverStatus = await admin.serverStatus();
+
+        serverInfo = {
+          version: serverStatus.version,
+          uptime: serverStatus.uptime,
+          connections: serverStatus.connections ? {
+            current: serverStatus.connections.current,
+            available: serverStatus.connections.available,
+            totalCreated: serverStatus.connections.totalCreated
+          } : null
+        };
+      }
+    } catch (serverInfoError) {
+      console.log('Could not get server info:', serverInfoError.message);
+      // Non-critical, continue without server info
+    }
+
+    // Return enhanced health status
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
@@ -88,14 +129,18 @@ app.get('/api/health', async (req, res) => {
         status: dbStatusText,
         statusCode: dbStatus,
         testResult: dbTestResult,
-        error: dbError
+        error: dbError,
+        pool: poolInfo,
+        server: serverInfo
       },
       environment: process.env.NODE_ENV || 'development',
       mongodb_uri: MONGODB_URI ? 'set' : 'not_set',
       node_version: process.version,
       memory: process.memoryUsage(),
+      uptime: process.uptime()
     });
   } catch (error) {
+    console.error('Health check error:', error);
     res.status(500).json({
       status: 'error',
       message: error.message,
@@ -197,11 +242,12 @@ const connectToDatabase = async () => {
             connectTimeoutMS: 2000, // Faster connection timeout
             socketTimeoutMS: 10000, // Reduced from 20s to 10s for faster failure
 
-            // Network and pooling optimizations
+            // Network and pooling optimizations for free MongoDB Atlas tier
             family: 4, // Use IPv4, skip trying IPv6
-            maxPoolSize: 1, // Smaller pool size for serverless functions
+            maxPoolSize: 1, // Strict limit of 1 for free MongoDB Atlas tier
             minPoolSize: 0, // Don't maintain connections when not in use
-            maxIdleTimeMS: 5000, // Close idle connections after 5 seconds
+            maxIdleTimeMS: 3000, // Close idle connections after 3 seconds
+            waitQueueTimeoutMS: 1000, // Timeout for waiting for a connection from the pool
 
             // Auto-reconnect settings - critical for ECONNRESET
             heartbeatFrequencyMS: 3000, // Even more frequent heartbeats (was 5000)
@@ -231,6 +277,20 @@ const connectToDatabase = async () => {
 
           // Connect to the database
           const client = await mongoose.connect(MONGODB_URI, options);
+
+          // Log connection pool information
+          const db = mongoose.connection.db;
+          if (db && db.serverConfig && db.serverConfig.s && db.serverConfig.s.pool) {
+            const pool = db.serverConfig.s.pool;
+            console.log('MongoDB connection pool stats:', {
+              totalConnections: pool.totalConnectionCount,
+              availableConnections: pool.availableConnectionCount,
+              maxPoolSize: options.maxPoolSize,
+              minPoolSize: options.minPoolSize
+            });
+          } else {
+            console.log('MongoDB connected but pool information not available');
+          }
 
           // Cache the database connection
           cachedDb = client;
