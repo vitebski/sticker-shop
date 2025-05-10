@@ -149,6 +149,9 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Import dependencies
+const mongoose = require('mongoose');
+
 // Import the centralized MongoDB connection utility
 const mongoConnect = require('../utils/mongoConnect');
 
@@ -169,17 +172,18 @@ app.use(async (req, res, next) => {
     if (req.path === '/api/health' ||
         req.path === '/api' ||
         req.path.startsWith('/uploads/') ||
-        req.path.includes('.')) {
+        req.path.includes('.') ||
+        req.method === 'OPTIONS') { // Also skip for CORS preflight requests
       return next();
     }
 
     // Log the request for debugging
     console.log(`DB connection middleware for: ${req.method} ${req.path}`);
 
-    // Set an even shorter timeout for the database connection (2.5s instead of 3s)
-    // This gives more time for the actual route handler to execute within Vercel's 10s limit
+    // Set a longer timeout for the database connection (5s instead of 2.5s)
+    // This gives more time for the connection to be established
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Database connection timeout')), 2500);
+      setTimeout(() => reject(new Error('Database connection timeout')), 5000);
     });
 
     try {
@@ -193,8 +197,22 @@ app.use(async (req, res, next) => {
       // Add connection status to response headers for debugging
       res.setHeader('X-MongoDB-Connection-Time', connectionTime.toString());
 
+      // Add a flag to the request to indicate that we've connected to the database
+      req.dbConnected = true;
+
       next();
     } catch (error) {
+      // Check if the error is related to the circuit breaker
+      if (error.message && error.message.includes('Circuit breaker open')) {
+        console.error('Circuit breaker open in middleware:', error.message);
+        return res.status(503).json({
+          message: 'Database service temporarily unavailable due to connection issues. Please try again later.',
+          error: 'Circuit breaker open',
+          status: 'service_unavailable',
+          retryAfter: 30 // Suggest retry after 30 seconds (circuit breaker timeout)
+        });
+      }
+
       // If the error is a timeout, try to return a helpful error message
       if (error.message === 'Database connection timeout') {
         console.error(`Database connection timed out after ${Date.now() - requestStartTime}ms`);
@@ -202,7 +220,7 @@ app.use(async (req, res, next) => {
           message: 'Database connection timed out. Please try again later.',
           error: 'Connection timeout',
           status: 'service_unavailable',
-          retryAfter: 1 // Suggest retry after 1 second
+          retryAfter: 5 // Increased from 1s to 5s
         });
       }
 
@@ -213,7 +231,7 @@ app.use(async (req, res, next) => {
           message: 'Connection to database was reset. This may be due to network issues.',
           error: 'ECONNRESET',
           status: 'service_unavailable',
-          retryAfter: 2 // Suggest retry after 2 seconds
+          retryAfter: 5 // Increased from 2s to 5s
         });
       }
 
@@ -237,7 +255,7 @@ app.use(async (req, res, next) => {
           message: 'Connection to database was broken. The server will attempt to reconnect on your next request.',
           error: 'EPIPE',
           status: 'service_unavailable',
-          retryAfter: 3 // Suggest retry after 3 seconds
+          retryAfter: 5 // Increased from 3s to 5s
         });
       }
 
@@ -255,12 +273,12 @@ app.use(async (req, res, next) => {
       timeElapsed: Date.now() - requestStartTime
     });
 
-    // Return a user-friendly error response
-    return res.status(500).json({
+    // Return a user-friendly error response with a longer retry time
+    return res.status(503).json({
       message: 'Database connection failed. Please try again later.',
       error: error.message,
-      status: 'error',
-      retryAfter: 3 // Suggest retry after 3 seconds
+      status: 'service_unavailable',
+      retryAfter: 10 // Increased from 3s to 10s
     });
   }
 });
